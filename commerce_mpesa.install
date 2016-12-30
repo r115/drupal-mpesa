@@ -1,0 +1,81 @@
+<?php
+/**
+  * Implement hook_schema()
+  * 
+  * 
+{ 
+   "service_name" : "MPESA", 
+   "business_number" : "888555", 
+   "transaction_reference" : "DE45GK45" 
+   "internal_transaction_id" : 3222 
+   "transaction_timestamp" : "2013-03-18T13:57:00Z" 
+   "transaction_type" : "Paybill" 
+   "account_number" : "445534" 
+   "sender_phone" : "+254903119111" 
+   "first_name" : "John" 
+   "middle_name" : "K" 
+   "last_name" : "Doe" 
+   "amount" : 4000 
+   "currency" : "KES" 
+   "signature" : "dfafwerewKkladaHOKJdafdf" 
+}
+  */
+function commerce_mpesa_schema() {
+  $schema['mpesa_transactions'] = array(
+    'description' => 'This table stores transactions from mpesa',
+    'fields' => array(
+      'transaction_id' => array(
+        'type' => 'varchar',
+        'not null' => TRUE,
+        'length' => 255,
+        'description' => 'the mpesa transaction id'
+      ),
+      'transaction_timestamp' => array(
+        'type' => 'varchar',
+        'not null' => FALSE,
+        'length' => 255,
+        'description' => 'the mpesa transaction time'
+      ),
+      'sender_phone' => array(
+        'type' => 'varchar',
+        'not null' => FALSE,
+        'length' => 255,
+        'description' => 'the phone number sending the money'
+      ),
+      'first_name' => array(
+        'type' => 'varchar',
+        'not null' => FALSE,
+        'length' => 255,
+        'description' => 'First name of sender'
+      ),
+      'last_name' => array(
+        'type' => 'varchar',
+        'not null' => FALSE,
+        'length' => 255,
+        'description' => 'Last name of sender'
+      ),
+      'amount' => array(
+        'type' => 'int',
+        'not null' => TRUE,
+        'length' => 255,
+        'description' => 'The amount paid in'
+      ),
+      'status' => array(
+        'type' => 'int',
+        'not null' => FALSE,
+        'length' => 255,
+        'default' => 0,
+        'description' => 'Is the transaction id already taken'
+      ),
+      'payment_confirmed' => array(
+        'type' => 'int',
+        'not null' => FALSE,
+        'length' => 255,
+        'description' => 'The time when the transaction status changed'
+      ),
+    ),
+    'primary key' => array('transaction_id'),
+  );
+
+  return $schema;
+}

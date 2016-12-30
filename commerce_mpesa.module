@@ -1,0 +1,319 @@
+<?php
+/*
+ * @file
+ *
+ * Implements Mpesa support for Drupal commerce
+ *
+ * @todo Provide a test mode for developers in a non online environment
+ */
+
+define('MPESA_PROVIDER','kopokopo');
+
+
+/**
+   * Implements hook_payment_method_info()
+   *
+   * Register the payment method so it is known to Drupal Commerce
+   */
+function commerce_mpesa_commerce_payment_method_info() {
+    $payment_methods = array();
+
+    $payment_methods['commerce_mpesa'] = array(
+      'title' => t("Commerce Mpesa"),
+      'display_title' => "Mpesa",
+      'short_title' => 'Mpesa',
+      'description' => 'Online Payments Using Mpesa',
+      'offsite' => FALSE,
+      'offsite_autoredirect' => FALSE,
+      'active' => TRUE,
+      'terminal' => FALSE,
+    );
+
+    return $payment_methods;
+}
+
+
+ /**
+   * Implements hook_menu()
+   * 
+   * Create the page that holds the mpesa transaction verification form and complete order callback
+   */
+function commerce_mpesa_menu() {
+    $items = array();
+
+    $items['mpesa/callback'] = array(
+      'title' => 'Transaction confirm',
+      'page callback' => 'commerce_mpesa_store',
+      'access callback' => TRUE,
+      'type' => MENU_CALLBACK,
+    );
+
+    return $items;
+}
+
+
+  /**
+   * Implements CALLBACK_commerce_payment_method_settings_form().
+   */
+  function commerce_mpesa_settings_form($settings = NULL) {
+    $form = array();
+
+    // Set defaults for first time load.
+    $settings = (array) $settings + array(
+      'kopokopo_secret' => '',
+      'mpesa_provider' => 'kopokopo',
+      'mpesa_paybill' => ''
+    );
+
+    $form['kopokopo_secret'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Kopokopo Secret'),
+      '#description' => t('Secret Key as provided by Kopokopo'),
+      '#default_value' => $settings['kopokopo_secret'],
+      '#required' => TRUE,
+    );
+
+    $form['mpesa_paybill'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Paybill Number'),
+      '#description' => t('The Mpesa Till Number'),
+      '#default_value' => $settings['mpesa_paybill'],
+      '#required' => TRUE,
+    );
+
+    $form['mpesa_provider'] = array(
+      '#type' => 'radios',
+      '#title' => t('Mpesa Provider'),
+      '#description' => t('Who issued the paybill/till number. Currently supports kopokopo only.'),
+      '#options' => array(
+        MPESA_PROVIDER => t('Kopokopo'),
+      ),
+      '#default_value' => $settings['mpesa_provider'],
+    );
+
+    return $form;
+  }
+
+/**
+ * Payment method callback: submit form.
+ *
+ * @param $payment_method
+ *
+ * @return mixed
+ */
+function commerce_mpesa_submit_form($payment_method, $pane_values, $checkout_pane, $order) {
+  $settings = $payment_method['settings'];
+
+
+   $form['mpesa'] = array(
+    '#type' => 'fieldset',
+    //'#title' => t('Initial Info'),
+    '#prefix' => 'Make a payment to the following till number : ' . $settings['mpesa_paybill']
+  );
+  
+  $form['mpesa']['transaction_id'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Mpesa Transaction ID'),
+    '#required' => TRUE,
+    '#description' => t('Enter the Mpesa transaction id.'),  
+  );
+
+  $form['mpesa']['mobile_phone_number'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Phone number'),
+    '#required' => TRUE,
+    '#description' => t('Phone number used to make the mpesa payment. 07xxxxxxxx'),  
+  );
+  
+  
+  return $form;
+}
+
+
+/**
+ * Payment method callback: submit form submission.
+ */
+function commerce_mpesa_submit_form_submit($payment_method, $pane_form, $pane_values, $order, $charge) {
+  $order->data['commerce_mpesa'] = $pane_values;
+
+  commerce_mpesa_transaction($payment_method, $order, $charge);
+}
+
+/**
+ * Process an mpesa transaction.
+ *
+ * STEP 1
+ * ===========================
+ * Collect the phone number and transaction code that the user has provided.
+ *
+ * STEP 2
+ * ===========================
+ * Verify that we have an unclaimed mpesa transaction with the phone number and transaction id
+ *
+ * Step 3
+ * ============================
+ * Claim the mpesa transaction if  it is available
+ *
+ * STEP 4
+ * ============================
+ * Check if the mpesa amount matches the order amount
+ *
+ * STEP 5
+ * ============================
+ * Finish the transaction
+ *
+ * @param $payment_method
+ * @param $order
+ * @param $charge
+ */
+function commerce_mpesa_transaction($payment_method, $order, $charge){
+    //Recreate the order
+    $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
+    $total_amount = $order_wrapper->commerce_order_total->value()['amount'];
+
+
+    $phone_number = $order->data['commerce_mpesa']['mpesa']['mobile_phone_number'];
+    $transaction_id = $order->data['commerce_mpesa']['mpesa']['transaction_id'];
+
+    $mpesa_transactions = find_mpesa_transaction($phone_number,$transaction_id);
+
+    foreach($mpesa_transactions as $record){
+            //We have an unclaimed transaction. Lets work with it
+            $amount = $record->amount;
+
+            if($amount == round($total_amount/100)){
+                finish_mpesa_transaction($phone_number,$transaction_id);
+
+                //The amount matches. Lets finish the payment
+                $transaction = commerce_payment_transaction_new('commerce_mpesa', $order->order_id);
+                $transaction->instance_id = $payment_method['instance_id'];
+                $transaction->amount = $charge['amount'];
+                $transaction->currency_code = $charge['currency_code'];
+                $transaction->status = COMMERCE_PAYMENT_STATUS_SUCCESS;
+                $transaction->message = 'Mpesa transaction completed: Name:@name, Transaction ID: @transaction_id, Phone number: @phone_number';
+                $transaction->message_variables = array(
+                    '@name' => $record->first_name .' ' . $record->last_name,
+                    '@transaction_id' => $transaction_id,
+                    '@phone_number' => $phone_number,
+                );
+
+                commerce_payment_transaction_save($transaction);
+                commerce_payment_commerce_payment_transaction_insert($transaction);
+            }
+        }
+
+}
+
+/**
+ * Find an mpesa transaction
+ *
+ * @param $phone_number
+ * @param $transaction_id
+ * @return DatabaseStatementInterface|null
+ */
+function find_mpesa_transaction($phone_number, $transaction_id){
+    // Create an object of type SelectQuery
+    $query = db_select('mpesa_transactions', 'm');
+
+    $query->condition('m.sender_phone', $phone_number, '=')
+        ->condition('m.transaction_id',$transaction_id,'=')
+        ->condition('m.status',0,'=')
+        ->fields('m', array('transaction_id', 'sender_phone','amount','first_name','last_name'));
+
+    $results = $query->execute();
+
+
+
+    return $results;
+}
+
+
+/**
+ * Mark an mpesa transaction as complete
+ *
+ * @param $phone_number
+ * @param $transaction_id
+ */
+function finish_mpesa_transaction($phone_number,$transaction_id){
+    db_update('mpesa_transactions')
+        ->fields(array(
+            'status' => 1
+        ))
+        ->condition('sender_phone', $phone_number)
+        ->condition('transaction_id',$transaction_id)
+        ->execute();
+}
+
+function commerce_mpesa_store(){
+    $payment_method = commerce_payment_method_instance_load('commerce_mpesa|commerce_payment_commerce_mpesa');
+
+    $settings = $payment_method['settings'];
+
+    $received_json = file_get_contents("php://input",  TRUE);
+
+    $payload = drupal_json_decode($received_json, TRUE);
+
+    //Verify the transaction
+    if(verify_kopokopo($payload,$settings['kopokopo_secret'])){
+        db_insert('mpesa_transactions')
+            ->fields([
+                'first_name' => $payload['first_name'],
+                'last_name' => $payload['last_name'],
+                'amount' => (int)$payload['amount'],
+                'transaction_id' => $payload['transaction_reference'],
+                'transaction_timestamp' => $payload['transaction_timestamp'],
+                'status' => 0,
+                'payment_confirmed' =>time(),
+                'sender_phone' => str_replace('+254','0',$payload['sender_phone']),
+            ])
+            ->execute();
+
+        $response_data = [
+            "status" => "01",
+            "description" => "Accepted",
+            "subscriber_message" => "Message to send to subscriber"
+        ];
+
+        return drupal_json_output($response_data);
+    }
+    else{
+        return drupal_json_output([]);
+    }
+
+}
+
+ /**
+  * Verify that the transaction coming in from kopokopo is valid
+  * 
+  * @param array $payload An array formed out of the kopokopo payload.
+  *
+  * @return boolean
+  */
+function verify_kopokopo(array $payload,$secret){
+        $signature = $payload['signature'];
+
+        unset($payload['signature']);
+
+        ksort($payload);
+
+        $msg = implode("&", $payload);
+
+        $tx_array = [];
+
+        foreach($payload as $key=>$value){
+            array_push($tx_array,$key.'='.$value);
+        }
+
+        $encodable_str = implode('&',$tx_array);
+
+
+        $hash = hash_hmac('sha1', $encodable_str, $secret, true);
+
+        $hash_64 = base64_encode($hash);
+        
+        if($signature == $hash_64){
+            return true;
+        }
+
+        return false;
+}
