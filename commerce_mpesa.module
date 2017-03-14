@@ -177,7 +177,8 @@ function commerce_mpesa_transaction($payment_method, $order, $charge){
 
     $mpesa_transactions = find_mpesa_transaction($phone_number,$transaction_id);
 
-    foreach($mpesa_transactions as $record){
+    if($mpesa_transactions->rowCount() > 0){
+      foreach($mpesa_transactions as $record){
             //We have an unclaimed transaction. Lets work with it
             $amount = $record->amount;
 
@@ -201,6 +202,12 @@ function commerce_mpesa_transaction($payment_method, $order, $charge){
                 commerce_payment_commerce_payment_transaction_insert($transaction);
             }
         }
+    }
+    else{
+      //The transaction has failed. We post nothing
+      
+    }
+    
 
 }
 
